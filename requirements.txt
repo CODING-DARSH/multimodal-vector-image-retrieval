@@ -1,0 +1,7 @@
+torch
+torchvision
+faiss-cpu
+pillow
+numpy
+icrawler
+git+https://github.com/openai/CLIP.git
