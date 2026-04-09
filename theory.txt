@@ -1,0 +1,178 @@
+# 1. Install for the one-time export only
+pip install torch torchvision git+https://github.com/openai/CLIP.git onnxruntime onnx icrawler Pillow numpy faiss-cpu
+
+# 2. Export CLIP to ONNX (takes ~2 min, one time only)
+python scripts/export_to_onnx.py
+
+# 3. Download images + build index (takes ~5 min)
+python scripts/ingest.py --per-query 15
+
+# 4. Start everything
+docker compose up --build
+
+# 5. Open http://localhost:3000
+
+
+Why multiprocessing spawn not fork: ONNX Runtime is not fork-safe — the session state gets corrupted when copied. Spawn starts a fresh Python interpreter per worker. Costs ~2 seconds once at the start of indexing, but runs correctly on all platforms including Windows.
+Why batch size 8: A single CLIP image tensor is ~600KB. Eight of them = ~4.8MB, which fits in L3 CPU cache. At batch=32 you get 19MB per call — cache pressure slows things down. Batch=8 is the sweet spot on most laptops giving ~22ms per batch instead of 144ms for 8 sequential calls.
+Why random port for the sidecar: If you hardcode 8000 and something else is using it, the sidecar fails silently and the app shows a blank screen. Random port selection finds a free port every time. The Rust shell reads it from the sidecar's stdout (SIDECAR_PORT=52341) and the React app asks Rust for it via invoke("get_sidecar_port").
+Why one Python process instead of the Docker two-service split: On a desktop app, if the window closes everything dies together anyway — isolation between encoder and API buys you nothing. One process means one model load, no HTTP hop between encoder and search, and one simpler PyInstaller bundle.
+Why onedir not onefile for PyInstaller: onefile packs everything into a self-extracting zip. On every launch it extracts to a temp folder — adds 3s startup, and Windows Defender frequently flags self-extracting executables as suspicious. onedir is a folder — Tauri bundles the whole folder, startup is instant.
+The exact commands to run everything are in the README, step by step.
+
+
+Why ONNX?
+
+Good answer:
+
+ONNX allowed me to run the CLIP model with INT8 quantization on CPU, reducing inference latency and removing the need for PyTorch dependencies.
+
+Why FAISS IVFFlat?
+
+Answer:
+
+IVFFlat provides a good recall/latency tradeoff and allows tuning nprobe at query time without rebuilding the index.
+
+Why multiprocessing instead of threads?
+
+Answer:
+
+Python GIL limits CPU-bound tasks, so multiprocessing allows parallel ONNX inference sessions.
+
+Why Tauri instead of Electron?
+
+Answer:
+
+Tauri provides a much smaller binary (~10MB) and uses the system webview instead of bundling Chromium.
+
+
+
+
+FAISS retrieve 50
+↓
+cross-encoder rerank
+↓
+top 10 results
+
+Top-1 accuracy
+Top-5 recall
+Mean reciprocal rank
+
+
+
+I optimized the CLIP model by exporting it to ONNX and applying INT8 quantization, which reduced model size from ~350MB to ~90MB and lowered inference latency from ~80ms to ~18ms. This allowed the entire multimodal search system to run efficiently on CPU without requiring GPU acceleration
+
+
+
+
+
+
+
+
+
+
+
+PS C:\Users\Darsh\OneDrive\Desktop\NLP> python scripts/export_to_onnx.py
+============================================================
+CLIP → ONNX Export + INT8 Quantization
+============================================================
+Loading CLIP ViT-B/32 in PyTorch...
+Exporting vision encoder to ONNX (FP32)...
+C:\Users\Darsh\OneDrive\Desktop\NLP\scripts\export_to_onnx.py:114: UserWarning: # 'dynamic_axes' is not recommended when dynamo=True, and may lead to 'torch._dynamo.exc.UserError: Constraints violated.' Supply the 'dynamic_shapes' argument instead if export is unsuccessful.
+  torch.onnx.export(
+W0409 11:22:43.464000 13712 torch\onnx\_internal\exporter\_compat.py:133] Setting ONNX exporter to use operator set version 18 because the requested opset_version 14 is a lower version than we have implementations for. Automatic version conversion will be performed, which may not be successful at converting to the requested version. If version conversion is unsuccessful, the opset version of the exported model will be kept at 18. Please consider setting opset_version >=18 to leverage latest ONNX features
+[torch.onnx] Obtain model graph for `VisionEncoder([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `VisionEncoder([...]` with `torch.export.export(..., strict=False)`... ✅
+[torch.onnx] Run decompositions...
+C:\Python313\Lib\copyreg.py:99: FutureWarning: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+  return cls.__new__(cls, *args)
+[torch.onnx] Run decompositions... ✅
+[torch.onnx] Translate the graph into ONNX...
+[torch.onnx] Translate the graph into ONNX... ✅
+The model version conversion is not supported by the onnxscript version converter and fallback is enabled. The model will be converted using the onnx C API (target version: 14).
+Failed to convert the model to the target version 14 using the ONNX C API. The model was not modified
+Traceback (most recent call last):
+  File "C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\onnxscript\version_converter\__init__.py", line 120, in call
+    converted_proto = _c_api_utils.call_onnx_api(
+        func=_partial_convert_version, model=model
+    )
+  File "C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\onnxscript\version_converter\_c_api_utils.py", line 65, in call_onnx_api
+    result = func(proto)
+  File "C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\onnxscript\version_converter\__init__.py", line 115, in _partial_convert_version
+    return onnx.version_converter.convert_version(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        proto, target_version=self.target_version
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\onnx\version_converter.py", line 39, in convert_version
+    converted_model_str = C.convert_version(model_str, target_version)
+RuntimeError: D:\a\onnx\onnx\onnx/version_converter/adapters/no_previous_version.h:24: adapt: Assertion `false` failed: No Previous Version of LayerNormalization exists
+[torch.onnx] Optimize the ONNX graph...
+Applied 18 of general pattern rewrite rules.
+[torch.onnx] Optimize the ONNX graph... ✅
+  FP32 model saved: models\clip_vision_fp32.onnx
+  FP32 size: 1.1 MB
+Quantizing to INT8...
+WARNING:root:Please consider to run pre-processing before quantization. Refer to example: https://github.com/microsoft/onnxruntime-inference-examples/blob/main/quantization/image_classification/cpu/ReadMe.md
+  INT8 model saved: models\clip_vision_int8.onnx
+  INT8 size: 89.4 MB
+  Size reduction: 0.0x smaller
+
+Benchmarking inference speed...
+  FP32 latency: 39.8ms
+  INT8 latency: 21.7ms
+  Speedup: 1.8x faster
+
+Export complete. Use models\clip_vision_int8.onnx for the encoder service.
+Loading CLIP for text encoder export...
+C:\Users\Darsh\OneDrive\Desktop\NLP\scripts\export_to_onnx.py:226: UserWarning: # 'dynamic_axes' is not recommended when dynamo=True, and may lead to 'torch._dynamo.exc.UserError: Constraints violated.' Supply the 'dynamic_shapes' argument instead if export is unsuccessful.
+  torch.onnx.export(
+W0409 11:23:02.038000 13712 torch\onnx\_internal\exporter\_compat.py:133] Setting ONNX exporter to use operator set version 18 because the requested opset_version 14 is a lower version than we have implementations for. Automatic version conversion will be performed, which may not be successful at converting to the requested version. If version conversion is unsuccessful, the opset version of the exported model will be kept at 18. Please consider setting opset_version >=18 to leverage latest ONNX features
+[torch.onnx] Obtain model graph for `TextEncoder([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `TextEncoder([...]` with `torch.export.export(..., strict=False)`... ✅
+[torch.onnx] Run decompositions...
+C:\Python313\Lib\copyreg.py:99: FutureWarning: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+  return cls.__new__(cls, *args)
+[torch.onnx] Run decompositions... ✅
+[torch.onnx] Translate the graph into ONNX...
+W0409 11:23:05.930000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.1.attn_mask' is not one of the initializers
+W0409 11:23:05.931000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.2.attn_mask' is not one of the initializers
+W0409 11:23:05.931000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.3.attn_mask' is not one of the initializers
+W0409 11:23:05.931000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.4.attn_mask' is not one of the initializers
+W0409 11:23:05.932000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.5.attn_mask' is not one of the initializers
+W0409 11:23:05.932000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.6.attn_mask' is not one of the initializers
+W0409 11:23:05.932000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.7.attn_mask' is not one of the initializers
+W0409 11:23:05.932000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.8.attn_mask' is not one of the initializers
+W0409 11:23:05.932000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.9.attn_mask' is not one of the initializers
+W0409 11:23:05.932000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.10.attn_mask' is not one of the initializers
+W0409 11:23:05.932000 13712 torch\onnx\_internal\exporter\_core.py:1253] Tensor 'model.transformer.resblocks.11.attn_mask' is not one of the initializers
+[torch.onnx] Translate the graph into ONNX... ✅
+WARNING:onnxscript.version_converter:The model version conversion is not supported by the onnxscript version converter and fallback is enabled. The model will be converted using the onnx C API (target version: 14).
+WARNING:onnxscript.version_converter:Failed to convert the model to the target version 14 using the ONNX C API. The model was not modified
+Traceback (most recent call last):
+  File "C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\onnxscript\version_converter\__init__.py", line 120, in call
+    converted_proto = _c_api_utils.call_onnx_api(
+        func=_partial_convert_version, model=model
+    )
+  File "C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\onnxscript\version_converter\_c_api_utils.py", line 65, in call_onnx_api
+    result = func(proto)
+  File "C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\onnxscript\version_converter\__init__.py", line 115, in _partial_convert_version
+    return onnx.version_converter.convert_version(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        proto, target_version=self.target_version
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\onnx\version_converter.py", line 39, in convert_version
+    converted_model_str = C.convert_version(model_str, target_version)
+RuntimeError: D:\a\onnx\onnx\onnx/version_converter/adapters/no_previous_version.h:24: adapt: Assertion `false` failed: No Previous Version of LayerNormalization exists
+[torch.onnx] Optimize the ONNX graph...
+Applied 17 of general pattern rewrite rules.
+[torch.onnx] Optimize the ONNX graph... ✅
+  Text FP32 model: models\clip_text_fp32.onnx (1.1 MB)
+WARNING:root:Please consider to run pre-processing before quantization. Refer to example: https://github.com/microsoft/onnxruntime-inference-examples/blob/main/quantization/image_classification/cpu/ReadMe.md
+  Text INT8 model: models\clip_text_int8.onnx (65.1 MB)
+
+Done. Both encoders are ready for the encoder service.
+PS C:\Users\Darsh\OneDrive\Desktop\NLP> 

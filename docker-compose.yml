@@ -1,0 +1,198 @@
+# docker-compose.yml
+#
+# WHY 3 CONTAINERS AND NOT 1 OR 2:
+#
+# Option A — Everything in one container:
+#   Simple to set up. But:
+#   - Change one line of React → restart the whole ML backend → 3s model reload
+#   - Can't scale API without scaling encoder (they have different bottlenecks)
+#   - One crash kills everything
+#   - Image is 1.5GB+ with all dependencies mixed
+#
+# Option B — Two containers (frontend + backend):
+#   Better. But the encoder (ML model) is still coupled to the API (search logic).
+#   If you later want to swap ONNX for TensorRT on a GPU machine, you have to
+#   modify the API container which also has Whisper and FAISS in it.
+#
+# Option C — Three containers (what we do):
+#   frontend: static file serving, zero ML code
+#   api: search logic, FAISS, Whisper, request routing
+#   encoder: ONNX inference, one job, independent lifecycle
+#
+#   TRADEOFF: One extra HTTP hop (api → encoder) adds ~1ms latency.
+#   We accept that because the decoupling benefits are worth it.
+#
+# CONTAINER COMMUNICATION:
+#   Docker Compose creates a private network called "search-net".
+#   Containers resolve each other by SERVICE NAME — not IP.
+#   So the API calls http://encoder:8001 — Docker DNS resolves "encoder"
+#   to the encoder container's internal IP automatically.
+#   This IP is NOT accessible from your laptop — only within the network.
+#   Only ports explicitly listed under "ports:" are exposed to the host.
+
+version: "3.9"
+
+services:
+
+  # ── Encoder Service ──────────────────────────────────────────────────────
+  encoder:
+    build:
+      context: ./services/encoder
+      dockerfile: Dockerfile
+    container_name: visual-search-encoder
+    restart: unless-stopped
+    # restart: unless-stopped = restart on crash, but NOT when you manually stop it
+    # This is better than "always" because "always" restarts even when you
+    # intentionally run `docker compose down`
+
+    ports:
+      - "8001:8001"
+    # 8001:8001 = host_port:container_port
+    # We expose 8001 to the host so you can test the encoder directly:
+    #   curl http://localhost:8001/health
+    # In a hardened production setup, you'd REMOVE this — encoder should
+    # only be reachable internally. We keep it for development convenience.
+
+    volumes:
+      - ./models:/app/models:ro
+      # :ro = read-only mount. The encoder only READS model files, never writes.
+      # Read-only mounts are a security best practice — if the encoder is
+      # somehow compromised, it can't overwrite your model files.
+      - model-cache:/root/.cache
+      # Cache CLIP downloads so they survive container restarts
+
+    environment:
+      - MODELS_DIR=/app/models
+      - OMP_NUM_THREADS=4
+      # OMP_NUM_THREADS: OpenMP thread count for ONNX Runtime's BLAS operations
+      # Set to cpu_count/2 — using ALL threads causes context-switch overhead
+      # when the system has other processes running
+
+    networks:
+      - search-net
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      # start_period: 90s because ONNX model loading takes 3-5s but on a
+      # cold Docker start with cache miss, it could take longer.
+      # During start_period, failed health checks don't count as failures.
+      retries: 3
+
+  # ── API Service ──────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    container_name: visual-search-api
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - ./embeddings:/app/embeddings:ro
+      # FAISS index is read-only at search time
+      - ./images:/app/images:ro
+      # Images are served as static files
+      - api-data:/app/data
+      # SQLite database for feedback and query logs
+      # This is a named volume (not a bind mount) — Docker manages it.
+      # Named volumes persist between container restarts automatically.
+      # Bind mounts (./local:container) require the local path to exist.
+
+    environment:
+      - ENCODER_URL=http://encoder:8001
+      # "encoder" resolves via Docker's internal DNS — no IP needed
+      - EMBEDDINGS_DIR=/app/embeddings
+      - IMAGES_DIR=/app/images
+      - DB_PATH=/app/data/search.db
+      - FAISS_NPROBE=10
+      # FAISS_NPROBE as env var means you can tune it WITHOUT rebuilding:
+      #   FAISS_NPROBE=20 docker compose up
+      # Higher nprobe = slower but more accurate search
+
+    depends_on:
+      encoder:
+        condition: service_healthy
+    # condition: service_healthy = wait until encoder passes health check
+    # Without this, API starts immediately, tries to call encoder,
+    # encoder is still loading the model → connection refused → crash.
+    # depends_on with service_healthy solves the startup ordering problem.
+    #
+    # NOTE: depends_on only affects STARTUP ORDER. If encoder crashes after
+    # startup, the API will fail individual requests but won't restart itself.
+    # That's correct behavior — the API should degrade gracefully, not die.
+
+    networks:
+      - search-net
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # ── Frontend Service ─────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./services/frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:8000
+      # Build arg tells Vite which API URL to bake into the bundle.
+      # IMPORTANT: This is a BUILD-TIME variable, not runtime.
+      # Vite replaces import.meta.env.VITE_API_URL in the source code
+      # during compilation. After build, it's a hardcoded string.
+      # If you change the API URL, you must rebuild the frontend image.
+      # This is a known tradeoff of static frontend builds vs SSR.
+
+    container_name: visual-search-frontend
+    restart: unless-stopped
+
+    ports:
+      - "3000:3000"
+    # Only port 3000 is exposed to the host (your browser).
+    # API (8000) is also exposed for direct curl/Postman testing.
+    # Encoder (8001) is exposed for development only.
+
+    depends_on:
+      - api
+    # Simple depends_on (no condition) — just start after API container starts.
+    # Frontend is static HTML, it doesn't actually need the API at startup.
+
+    networks:
+      - search-net
+
+# ── Networks ────────────────────────────────────────────────────────────────
+networks:
+  search-net:
+    driver: bridge
+    # bridge = the default Docker network driver
+    # Creates an isolated virtual network where containers can communicate
+    # by service name. Containers on this network are isolated from other
+    # Docker networks on your machine.
+    #
+    # Alternative: host network (container shares host's network stack)
+    # We don't use host because it bypasses Docker's DNS resolution
+    # (container hostname = service name trick wouldn't work)
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  model-cache:
+    # Named volume for CLIP model download cache (~350MB first download)
+    # Persists between `docker compose down` and `docker compose up`
+    # Without this: every restart re-downloads the CLIP model
+  api-data:
+    # Named volume for SQLite database (feedback, query logs)
+    # WHY NAMED VOLUME AND NOT BIND MOUNT:
+    #   Bind mount: ./data:/app/data — you manage the folder
+    #   Named volume: Docker manages it, stored in /var/lib/docker/volumes/
+    #   For databases: named volumes are better — Docker handles permissions,
+    #   and the data survives `docker compose down --volumes` only being
+    #   cleared when you explicitly want to reset.

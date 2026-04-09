@@ -1,0 +1,11 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+onnxruntime==1.17.0
+numpy==1.26.4
+Pillow==10.2.0
+torchvision==0.17.0
+# clip is needed only for tokenization at runtime (text encoder)
+# We get it from the OpenAI repo
+git+https://github.com/openai/CLIP.git
+httpx==0.26.0
+pydantic==2.5.3
