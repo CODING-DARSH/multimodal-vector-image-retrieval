@@ -19,14 +19,17 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+     git \
     # ffmpeg is needed by Whisper to decode audio files (mp3, wav, webm, etc.)
     # Without it, Whisper can only handle raw PCM.
     # Size cost: ~80MB — worth it for voice search capability.
+    
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
+RUN pip install --upgrade pip setuptools wheel
+# RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --no-build-isolation -r requirements.txt
 COPY main.py .
 
 # Create directories for runtime data

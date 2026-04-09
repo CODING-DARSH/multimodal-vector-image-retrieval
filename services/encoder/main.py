@@ -99,8 +99,10 @@ async def load_models():
     global vision_session, text_session, vision_input_name, text_input_name, startup_time
 
     models_dir = os.getenv("MODELS_DIR", "models")
-    vision_path = os.path.join(models_dir, "clip_vision_int8.onnx")
+    # vision_path = os.path.join(models_dir, "clip_vision_int8.onnx")
+    vision_path = os.path.join(models_dir, "clip_vision_fp32.onnx")
     text_path = os.path.join(models_dir, "clip_text_int8.onnx")
+    # text_path = os.path.join(models_dir, "clip_text_int8.onnx")
 
     # Session options: tune threading
     # intra_op = parallelism within a single operation (e.g. matrix multiply)

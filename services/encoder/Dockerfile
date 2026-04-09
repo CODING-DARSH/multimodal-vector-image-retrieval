@@ -30,6 +30,7 @@ WORKDIR /app
 # Install system deps needed to build Python packages with C extensions
 # --no-install-recommends: only install exactly what's listed, not suggested packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
     gcc \
     g++ \
     libgomp1 \
@@ -40,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # the cache files are already baked into the previous layer.
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --default-timeout=1200 --no-cache-dir -r requirements.txt
 # --no-cache-dir: don't store pip's download cache in the image
 # pip normally caches to speed up repeated installs, but in Docker
 # we build once and run many times — cache just wastes space.

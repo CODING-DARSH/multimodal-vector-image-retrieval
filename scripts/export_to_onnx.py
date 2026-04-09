@@ -229,10 +229,10 @@ def export_clip_text_encoder(output_dir: str = "models"):
         fp32_path,
         opset_version=14,
         input_names=["text_tokens"],
-        output_names=["embedding"],
+        output_names=["text_embedding"],
         dynamic_axes={
             "text_tokens": {0: "batch_size"},
-            "embedding": {0: "batch_size"},
+            "text_embedding": {0: "batch_size"},
         },
         do_constant_folding=True,
     )
