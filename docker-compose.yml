@@ -91,7 +91,7 @@ services:
     restart: unless-stopped
 
     ports:
-      - "8000:8000"
+      - "8088:8000"
 
     volumes:
       - ./embeddings:/app/embeddings:ro
@@ -144,8 +144,7 @@ services:
       context: ./services/frontend
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=http://localhost:8000
-      # Build arg tells Vite which API URL to bake into the bundle.
+        - VITE_API_URL=http://localhost:8088      # Build arg tells Vite which API URL to bake into the bundle.
       # IMPORTANT: This is a BUILD-TIME variable, not runtime.
       # Vite replaces import.meta.env.VITE_API_URL in the source code
       # during compilation. After build, it's a hardcoded string.
