@@ -64,10 +64,48 @@ I optimized the CLIP model by exporting it to ONNX and applying INT8 quantizatio
 
 
 
+The OS Awareness: You’re using Debian Trixie (the testing/stable-next branch for 2026), which shows you're keeping your environment modern and ready for the long term.
+
+docker compose restart api
+
+It uses a shared latent-space embedding model for zero-shot retrieval.
+
+python scripts/ingest.py --no-download --workers 4
 
 
 
 
+
+
+PS C:\Users\Darsh\OneDrive\Desktop\NLP> python scripts/ingest.py --no-download --batch-size 1
+
+[1/4] Scanning existing images...
+  Found 10488 images
+
+[2/4] Checking ONNX model...
+  Model found: models/clip_vision_int8.onnx
+
+[3/4] Encoding 10488 images (parallel batch)...
+  Parallel encoding: 13 workers × batch=1
+  Worker startup: ~26s (ONNX session load per worker)
+C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\PIL\TiffImagePlugin.py:950: UserWarning: Truncated File Read
+  warnings.warn(str(msg))
+C:\Users\Darsh\AppData\Roaming\Python\Python313\site-packages\PIL\Image.py:1047: UserWarning: Palette images with Transparency expressed in bytes should be converted to RGBA images
+  warnings.warn(
+  10488/10488 encoded (14.6 img/s, ~0s remaining))
+  Done: 10488 images in 718.6s (14.6 img/s)
+
+[4/4] Building FAISS index...
+  Building IVFFlat index (nlist=100, nprobe=10)
+  This does k-means clustering — takes a moment...
+  Training on 10488 vectors...
+  Training complete.
+  Index built: 10488 vectors, 512 dimensions
+
+Ingestion complete:
+  Index:    embeddings\faiss.index (21.8 MB)
+  Metadata: embeddings\metadata.pkl
+  Vectors:  10488
 
 
 
@@ -176,3 +214,5 @@ WARNING:root:Please consider to run pre-processing before quantization. Refer to
 
 Done. Both encoders are ready for the encoder service.
 PS C:\Users\Darsh\OneDrive\Desktop\NLP> 
+
+http://localhost:3000/
